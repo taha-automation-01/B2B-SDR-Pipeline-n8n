@@ -31,7 +31,7 @@ To run this pipeline, you need the following API keys and services:
 
 ## Installation
 
-1. **Clone the repository:**
+1. **“Clone the repository OR simply download the B2B SDR Pipeline.json file directly.”**
    
 ```bash
    git clone https://github.com/<your-username>/n8n-b2b-sdr-pipeline.git
