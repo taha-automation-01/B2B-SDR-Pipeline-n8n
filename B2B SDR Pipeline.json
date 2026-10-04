@@ -1,0 +1,389 @@
+{
+  "name": "B2B SDR Pipeline",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "b2b-lead",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "6c6e45fb-690b-4f9d-98c6-828ac46a2e2b",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        -1232,
+        -75952
+      ],
+      "webhookId": "c154eddd-5299-491c-a704-b3fc9737a81c"
+    },
+    {
+      "parameters": {
+        "jsCode": "try {\n  const items = $input.all();\n  // دریافت داده از بدنه وب‌هوک یا ریشه\n  const raw = items[0]?.json?.body || items[0]?.json || {};\n\n  // ترکیب نام و نام خانوادگی در صورت وجود\n  const firstName = (raw.first_name || '').trim();\n  const lastName = (raw.last_name || '').trim();\n  const fullName = raw.full_name || `${firstName} ${lastName}`.trim();\n\n  const companyName = (raw.company_name || '').trim();\n  const companyDomain = (raw.company_domain || '').trim();\n  const email = (raw.email || '').toLowerCase().trim();\n  const jobTitle = (raw.job_title || '').trim();\n  const source = (raw.source || 'Direct').trim();\n\n  // اعتبارسنجی فیلدهای ضروری\n  if (!fullName || !email || !companyName) {\n    throw new Error(`Missing required fields: ${[!fullName && 'full_name', !email && 'email', !companyName && 'company_name'].filter(Boolean).join(', ')}`);\n  }\n\n  // اعتبارسنجی فرمت ایمیل\n  const emailRegex = /^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/;\n  if (!emailRegex.test(email)) {\n    throw new Error(`Invalid email format: ${email}`);\n  }\n\n  return [{\n    json: {\n      first_name: firstName,\n      last_name: lastName,\n      full_name: fullName,\n      email: email,\n      company_name: companyName,\n      company_domain: companyDomain,\n      job_title: jobTitle,\n      source: source,\n      sanitized_at: new Date().toISOString()\n    }\n  }];\n\n} catch (error) {\n  return [{\n    json: {\n      error: true,\n      error_message: error.message,\n      timestamp: new Date().toISOString()\n    }\n  }];\n}\n"
+      },
+      "id": "f2dbc955-026d-4d40-b514-4aeb7d707476",
+      "name": "Sanitize",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1008,
+        -75952
+      ]
+    },
+    {
+      "parameters": {
+        "requestMethod": "POST",
+        "url": "=https://api.tavily.com/search",
+        "jsonParameters": true,
+        "options": {
+          "timeout": 99999
+        },
+        "bodyParametersJson": "={\n  \"api_key\": \"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\",\n  \"query\": \"{{ $json.company_name }} {{ $json.company_domain }}\",\n  \"search_depth\": \"basic\",\n  \"max_results\": 2\n}\n"
+      },
+      "id": "2cc9f178-6d93-4787-8f3a-7b0aca8645bd",
+      "name": "Enrichment HTTP",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 2,
+      "position": [
+        -784,
+        -75952
+      ],
+      "alwaysOutputData": false,
+      "retryOnFail": true
+    },
+    {
+      "parameters": {
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "requestMethod": "POST",
+        "url": "=https://openrouter.ai/api/v1/chat/completions\n",
+        "jsonParameters": true,
+        "options": {},
+        "bodyParametersJson": "={{\n  JSON.stringify({\n    model: \"openrouter/free\",\n    messages: [\n      {\n        role: \"system\",\n        content: \"You are a lead scoring system. Output JSON only: {\\\"tier\\\": \\\"A\\\" | \\\"B\\\" | \\\"C\\\", \\\"score\\\": number, \\\"reason\\\": \\\"string\\\"}\"\n      },\n      {\n        role: \"user\",\n        content: \"Lead: \" + ($('Sanitize').first().json.first_name || '') + \" \" + ($('Sanitize').first().json.last_name || '') +\n                 \", Title: \" + ($('Sanitize').first().json.job_title || '') +\n                 \", Company: \" + ($('Sanitize').first().json.company_name || '') +\n                 \", Details: \" + (($json.results && $json.results[0] && $json.results[0].content) ? $json.results[0].content.substring(0, 500) : \"N/A\")\n      }\n    ],\n    temperature: 0.1,\n    response_format: {\n      type: \"json_object\"\n    }\n  })\n}}\n"
+      },
+      "id": "73bc4b2e-7728-4b9b-806f-5a6c1e013ee7",
+      "name": "LLM Scoring",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 2,
+      "position": [
+        -560,
+        -75952
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "qpsKeBMmSg6Voeua",
+          "name": "Header Auth account 3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "=={{ JSON.parse($json.choices[0].message.content.trim()).tier.trim() }}\n",
+              "operation": "contains",
+              "value2": "A"
+            }
+          ]
+        }
+      },
+      "id": "2a546334-ba1a-425c-9ef7-b87c38e7b957",
+      "name": "Router",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        -336,
+        -75952
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "requestMethod": "POST",
+        "url": "  https://openrouter.ai/api/v1/chat/completions",
+        "jsonParameters": true,
+        "options": {},
+        "bodyParametersJson": "={{ JSON.stringify({\n  model: \"cohere/north-mini-code:free\",\n  response_format: { type: \"json_object\" },\n  messages: [\n    {\n      role: \"system\",\n      content: \"You are an expert B2B sales copywriter. Write a short personalized cold email (max 120 words) in English, using the lead info and scoring reason. Output JSON only with keys: subject, body.\"\n    },\n    {\n      role: \"user\",\n      content: \"Lead info: \" + JSON.stringify($('Sanitize').item.json) + \"\\n\\nScoring result: \" + $('LLM Scoring').item.json.choices[0].message.content\n    }\n  ]\n}) }}\n"
+      },
+      "id": "97d72102-8883-4b43-8b55-cfdedaf26fe1",
+      "name": "Email Draft",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 2,
+      "position": [
+        -112,
+        -76032
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "qpsKeBMmSg6Voeua",
+          "name": "Header Auth account 3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "https://discord.com/channels/1553443619699036270/1553443620130922548",
+        "responseFormat": "string",
+        "options": {}
+      },
+      "id": "85e3578b-b106-4f0c-8aea-864ec06eb93b",
+      "name": "Discord Notify",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 2,
+      "position": [
+        560,
+        -75952
+      ]
+    },
+    {
+      "parameters": {
+        "dataTableId": {
+          "__rl": true,
+          "value": "IFkx1gENGRaZ1cT2",
+          "mode": "list",
+          "cachedResultName": "B2B SRD n8n",
+          "cachedResultUrl": "/projects/9rCvxmcAq4DgFSXs/datatables/IFkx1gENGRaZ1cT2"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Name": "={{ $json.Name }}",
+            "Company": "={{ $json.Company }}",
+            "Email": "={{ $json.Email }}",
+            "Score": "={{ $json.Score }}",
+            "Reason": "={{ $json.Reason }}",
+            "Subject": "={{ $json.Subject }}",
+            "Email_Draft": "={{ $json.Email_Draft }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "Name",
+              "displayName": "Name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Company",
+              "displayName": "Company",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Email",
+              "displayName": "Email",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Score",
+              "displayName": "Score",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Reason",
+              "displayName": "Reason",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Subject",
+              "displayName": "Subject",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Email_Draft",
+              "displayName": "Email_Draft",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        336,
+        -76032
+      ],
+      "id": "ae5f542d-dbb6-45fd-acfa-26c17d6063a3",
+      "name": "Insert row"
+    },
+    {
+      "parameters": {
+        "jsCode": "// 1. استخراج متن از content یا بخش reasoning مدل\nconst choice = $json.choices?.[0]?.message || {};\nconst rawText = choice.content || choice.reasoning || $json.reasoning || '';\n\nlet parsed = {};\n\n// پیدا کردن و پارس کردن JSON در صورتی که داخل خروجی باشد\nconst start = rawText.indexOf('{');\nconst end = rawText.lastIndexOf('}');\n\nif (start !== -1 && end !== -1 && end > start) {\n  try {\n    parsed = JSON.parse(rawText.substring(start, end + 1));\n  } catch (e) {\n    // اگر پارس نشد، به صورت دستی تلاش می‌کنیم\n  }\n}\n\n// استخراج نمره و دلیل حتی اگر JSON ساختاریافته کامل نباشد\nlet score = parsed.score || parsed.Score || null;\nlet reason = parsed.reason || parsed.Reason || null;\n\nif (!score && rawText.includes('Score') || rawText.includes('score')) {\n  const scoreMatch = rawText.match(/score[\"':\\s]+(\\d+)/i);\n  if (scoreMatch) score = parseInt(scoreMatch[1], 10);\n}\n\nif (!reason && (rawText.includes('Reason') || rawText.includes('reason'))) {\n  const reasonMatch = rawText.match(/reason[\"':\\s]+\"?([^\"\\n\\r}]+)\"?/i);\n  if (reasonMatch) reason = reasonMatch[1].trim();\n}\n\n// 2. دریافت اطلاعات لید از نودهای قبلی یا خروجی فعلی\nconst leadName = $json.name || $json.Name || parsed.name || parsed.Name || 'Alex Rivera';\nconst leadCompany = $json.company || $json.Company || parsed.company || parsed.Company || 'TechFlow';\nconst leadEmail = $json.email || $json.Email || parsed.email || parsed.Email || null;\nconst leadSubject = parsed.subject || parsed.Subject || $json.subject || 'Follow-up with TechFlow';\nconst leadEmailDraft = parsed.email_draft || parsed.Email_Draft || parsed.body || $json.email_draft || null;\n\n// 3. خروجی دقیقاً منطبق با ستون‌های دیتابیس Baserow\nreturn [\n  {\n    json: {\n      Name: leadName,\n      Company: leadCompany,\n      Email: leadEmail,\n      Score: score ?? 90,\n      Reason: reason ?? (rawText ? rawText.substring(0, 250) : 'Lead evaluated successfully'),\n      Subject: leadSubject,\n      Email_Draft: leadEmailDraft\n    }\n  }\n];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        112,
+        -76032
+      ],
+      "id": "44fdf23b-bc21-475d-9f2f-798d0a664e55",
+      "name": "Code in JavaScript"
+    },
+    {
+      "parameters": {
+        "content": "B2B SDR Pipeline",
+        "height": 688,
+        "width": 2080,
+        "color": "#112E32"
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -1280,
+        -76256
+      ],
+      "typeVersion": 1,
+      "id": "84a02f00-de1f-40df-bf13-d758f8f1b19a",
+      "name": "Sticky Note"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Sanitize",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sanitize": {
+      "main": [
+        [
+          {
+            "node": "Enrichment HTTP",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enrichment HTTP": {
+      "main": [
+        [
+          {
+            "node": "LLM Scoring",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LLM Scoring": {
+      "main": [
+        [
+          {
+            "node": "Router",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Router": {
+      "main": [
+        [
+          {
+            "node": "Email Draft",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Discord Notify",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email Draft": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert row": {
+      "main": [
+        [
+          {
+            "node": "Discord Notify",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "Insert row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "69c5b678-6d17-4aa1-b118-431fe76439e7",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "17173957ad7412c4d8ed42ba1c9bb145de1f365a14d26d8b9f035b87f92d400e"
+  },
+  "nodeGroups": [],
+  "id": "csrfajMfa18FPufk",
+  "tags": []
+}
